@@ -10,6 +10,16 @@ import ProjectHeader from '../components/project/ProjectHeader';
 import MembersModal from '../components/project/MembersModal';
 import FilesTab from '../components/project/FilesTab';
 
+// Safe column parser — handles string, array, or undefined
+function parseColumns(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return []; }
+  }
+  return [];
+}
+
 export default function ProjectPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -19,7 +29,7 @@ export default function ProjectPage() {
   const [selectedTask, setSelectedTask] = useState(null);
   const [createColumn, setCreateColumn] = useState(null);
   const [showMembers, setShowMembers] = useState(false);
-  const [activeView, setActiveView] = useState('board'); // board | files
+  const [activeView, setActiveView] = useState('board');
 
   const fetchData = useCallback(async () => {
     try {
@@ -37,17 +47,23 @@ export default function ProjectPage() {
   useEffect(() => {
     fetchData();
     socket.emit('join_project', id);
+
     socket.on('task:created', (task) => setTasks(prev => [...prev, task]));
     socket.on('task:updated', (task) => {
-      console.log('task:updated received:', task._id); // debug
+      console.log('task:updated received:', task._id);
       setTasks(prev => prev.map(t => t._id === task._id ? task : t));
+      setSelectedTask(prev => prev?._id === task._id ? task : prev);
     });
     socket.on('task:moved', (task) => setTasks(prev => prev.map(t => t._id === task._id ? task : t)));
-    socket.on('task:deleted', (taskId) => setTasks(prev => prev.filter(t => t._id !== taskId)));
+    socket.on('task:deleted', (taskId) => {
+      setTasks(prev => prev.filter(t => t._id !== taskId));
+      setSelectedTask(prev => prev?._id === taskId ? null : prev);
+    });
     socket.on('project:updated', (proj) => setProject(proj));
+
     return () => {
       socket.emit('leave_project', id);
-      ['task:created', 'task:updated', 'task:moved', 'task:deleted', 'project:updated'].forEach(e => socket.off(e));
+      ['task:created','task:updated','task:moved','task:deleted','project:updated'].forEach(e => socket.off(e));
     };
   }, [id, fetchData]);
 
@@ -55,21 +71,25 @@ export default function ProjectPage() {
     const { destination, source, draggableId } = result;
     if (!destination) return;
     if (destination.droppableId === source.droppableId && destination.index === source.index) return;
-    const task = tasks.find(t => t._id === draggableId);
+
     setTasks(prev => prev.map(t => t._id === draggableId
       ? { ...t, columnId: destination.droppableId, order: destination.index } : t));
-    await api.put(`/tasks/${draggableId}/move`, { columnId: destination.droppableId, order: destination.index });
-  };
 
-  const handleTaskUpdated = (task) => {
-    setTasks(prev => prev.map(t => t._id === task._id ? task : t));
-    if (selectedTask?._id === task._id) setSelectedTask(task);
+    try {
+      await api.put(`/tasks/${draggableId}/move`, {
+        columnId: destination.droppableId,
+        order: destination.index
+      });
+    } catch (err) {
+      console.error('Move failed:', err.message);
+      fetchData(); // revert on error
+    }
   };
 
   if (loading) return <div className="loading-screen"><div className="spinner"></div></div>;
   if (!project) return null;
 
-  const columns = project.columns || [];
+  const columns = parseColumns(project.columns);
 
   return (
     <div className="project-page">
@@ -88,57 +108,97 @@ export default function ProjectPage() {
       ) : (
         <DragDropContext onDragEnd={onDragEnd}>
           <div className="board">
-            {columns.sort((a, b) => a.order - b.order).map(col => {
-              const colTasks = tasks.filter(t => t.columnId === col.id).sort((a, b) => a.order - b.order);
-              return (
-                <div key={col.id} className="column">
-                  <div className="column-header" style={{ '--col-color': col.color }}>
-                    <div className="col-title">
-                      <span className="col-dot"></span>
-                      <span>{col.name}</span>
-                      <span className="col-count">{colTasks.length}</span>
-                    </div>
-                    <button className="col-add-btn" onClick={() => setCreateColumn(col.id)}>+</button>
-                  </div>
-                  <Droppable droppableId={col.id}>
-                    {(provided, snapshot) => (
-                      <div ref={provided.innerRef} {...provided.droppableProps}
-                        className={`column-body ${snapshot.isDraggingOver ? 'dragging-over' : ''}`}>
-                        {colTasks.map((task, index) => (
-                          <Draggable key={task._id} draggableId={task._id} index={index}>
-                            {(provided, snapshot) => (
-                              <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps}>
-                                <TaskCard task={task} isDragging={snapshot.isDragging}
-                                  onClick={() => setSelectedTask(task)} />
-                              </div>
-                            )}
-                          </Draggable>
-                        ))}
-                        {provided.placeholder}
-                        <button className="add-task-btn" onClick={() => setCreateColumn(col.id)}>+ Add task</button>
+            {columns
+              .sort((a, b) => a.order - b.order)
+              .map(col => {
+                const colTasks = tasks
+                  .filter(t => t.columnId === col.id)
+                  .sort((a, b) => a.order - b.order);
+
+                return (
+                  <div key={col.id} className="column">
+                    <div className="column-header" style={{ '--col-color': col.color }}>
+                      <div className="col-title">
+                        <span className="col-dot"></span>
+                        <span>{col.name}</span>
+                        <span className="col-count">{colTasks.length}</span>
                       </div>
-                    )}
-                  </Droppable>
-                </div>
-              );
-            })}
+                      <button className="col-add-btn" onClick={() => setCreateColumn(col.id)}>+</button>
+                    </div>
+
+                    <Droppable droppableId={col.id} isDropDisabled={false}>
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.droppableProps}
+                          className={`column-body ${snapshot.isDraggingOver ? 'dragging-over' : ''}`}
+                        >
+                          {colTasks.map((task, index) => (
+                            <Draggable key={task._id} draggableId={task._id} index={index}>
+                              {(provided, snapshot) => (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  {...provided.dragHandleProps}
+                                >
+                                  <TaskCard
+                                    task={task}
+                                    isDragging={snapshot.isDragging}
+                                    onClick={() => setSelectedTask(task)}
+                                  />
+                                </div>
+                              )}
+                            </Draggable>
+                          ))}
+                          {provided.placeholder}
+                          <button className="add-task-btn" onClick={() => setCreateColumn(col.id)}>
+                            + Add task
+                          </button>
+                        </div>
+                      )}
+                    </Droppable>
+                  </div>
+                );
+              })}
           </div>
         </DragDropContext>
       )}
 
       {selectedTask && (
-        <TaskModal task={selectedTask} project={project}
+        <TaskModal
+          task={selectedTask}
+          project={{ ...project, columns }}
           onClose={() => setSelectedTask(null)}
-          onUpdated={handleTaskUpdated}
-          onDeleted={(taskId) => { setTasks(prev => prev.filter(t => t._id !== taskId)); setSelectedTask(null); }} />
+          onUpdated={(task) => {
+            setTasks(prev => prev.map(t => t._id === task._id ? task : t));
+            setSelectedTask(task);
+          }}
+          onDeleted={(taskId) => {
+            setTasks(prev => prev.filter(t => t._id !== taskId));
+            setSelectedTask(null);
+          }}
+        />
       )}
+
       {createColumn && (
-        <CreateTaskModal columnId={createColumn} projectId={id} project={project}
+        <CreateTaskModal
+          columnId={createColumn}
+          projectId={id}
+          project={project}
           onClose={() => setCreateColumn(null)}
-          onCreate={(task) => { setTasks(prev => [...prev, task]); setCreateColumn(null); }} />
+          onCreate={(task) => {
+            setTasks(prev => [...prev, task]);
+            setCreateColumn(null);
+          }}
+        />
       )}
+
       {showMembers && (
-        <MembersModal project={project} onClose={() => setShowMembers(false)} onUpdated={setProject} />
+        <MembersModal
+          project={project}
+          onClose={() => setShowMembers(false)}
+          onUpdated={setProject}
+        />
       )}
     </div>
   );

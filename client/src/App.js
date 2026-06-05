@@ -3,10 +3,12 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { ThemeProvider } from './context/ThemeContext';
+import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
 import ProjectPage from './pages/ProjectPage';
+import NotificationsPage from './pages/NotificationsPage';
 import Layout from './components/shared/Layout';
 
 const PrivateRoute = ({ children }) => {
@@ -24,11 +26,12 @@ const PublicRoute = ({ children }) => {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/dashboard" />} />
+      <Route path="/" element={<PublicRoute><HomePage /></PublicRoute>} />
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
       <Route path="/dashboard" element={<PrivateRoute><Layout><DashboardPage /></Layout></PrivateRoute>} />
       <Route path="/projects/:id" element={<PrivateRoute><Layout><ProjectPage /></Layout></PrivateRoute>} />
+      <Route path="/notifications" element={<PrivateRoute><Layout><NotificationsPage /></Layout></PrivateRoute>} />
     </Routes>
   );
 }
