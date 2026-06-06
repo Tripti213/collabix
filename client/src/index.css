@@ -2425,3 +2425,66 @@ button { cursor: pointer; border: none; outline: none; font-family: inherit; tra
   .calendar-grid { font-size: 12px; }
   .calendar-day { min-height: 60px; padding: 4px; }
 }
+
+/* ══════════════════════════════════════════
+   OWNER-ONLY RESTRICTIONS
+══════════════════════════════════════════ */
+.owner-only-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--warning);
+  background: rgba(245,158,11,0.1);
+  border: 1px solid rgba(245,158,11,0.3);
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.owner-restricted-msg {
+  font-size: 13px;
+  color: var(--text3);
+  background: var(--bg3);
+  border: 1px dashed var(--border2);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-top: 8px;
+  text-align: center;
+}
+
+.checklist-readonly .checklist-item input[type="checkbox"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.checklist-item input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.task-modal-error {
+  background: rgba(239,68,68,0.1);
+  border-bottom: 1px solid rgba(239,68,68,0.3);
+  color: var(--danger);
+  padding: 10px 22px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Done column lock */
+.col-lock-icon {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+
+/* Clear activity warning */
+.clear-activity-warning {
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: var(--danger);
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  margin-bottom: 8px;
+}

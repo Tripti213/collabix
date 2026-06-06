@@ -7,8 +7,16 @@ const auth = require('../middleware/auth');
 
 async function logActivity(projectId, userId, type, message, meta = {}) {
   try {
-    await Activity.create({ project: projectId, user: userId, type, message, meta });
-  } catch (e) { console.error('Activity log error:', e.message); }
+    const doc = await Activity.create({ project: projectId, user: userId, type, message, meta });
+    console.log('Activity logged:', type, '| id:', doc._id);
+  } catch (e) { 
+    console.error('Activity log FAILED:', type, '| error:', e.message);
+  }
+}
+
+async function isProjectOwner(projectId, userId) {
+  const project = await Project.findById(projectId).select('owner');
+  return project?.owner.toString() === userId.toString();
 }
 
 router.get('/project/:projectId', auth, async (req, res) => {
@@ -23,7 +31,6 @@ router.get('/project/:projectId', auth, async (req, res) => {
   }
 });
 
-// Get tasks with due dates for calendar
 router.get('/calendar/:projectId', auth, async (req, res) => {
   try {
     const tasks = await Task.find({
@@ -37,7 +44,6 @@ router.get('/calendar/:projectId', auth, async (req, res) => {
   }
 });
 
-// Get ALL tasks with due dates across all user projects
 router.get('/due/all', auth, async (req, res) => {
   try {
     const projects = await Project.find({
@@ -63,17 +69,23 @@ router.get('/due/all', auth, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const { title, description, project, columnId, assignees, priority, labels, dueDate, coverColor } = req.body;
+
+    // Only owner can assign tasks
+    const owner = await isProjectOwner(project, req.user._id);
+    const finalAssignees = owner ? (assignees || []) : [];
+
     const taskCount = await Task.countDocuments({ project, columnId });
     const task = await Task.create({
-      title, description, project, columnId, assignees, priority, labels, dueDate, coverColor,
+      title, description, project, columnId,
+      assignees: finalAssignees,
+      priority, labels, dueDate, coverColor,
       createdBy: req.user._id, order: taskCount
     });
     await task.populate('assignees', 'name email avatar');
     await task.populate('createdBy', 'name email avatar');
 
-    // Notify assignees
-    if (assignees?.length) {
-      for (const uid of assignees) {
+    if (owner && finalAssignees.length) {
+      for (const uid of finalAssignees) {
         if (uid.toString() !== req.user._id.toString()) {
           await Notification.create({
             recipient: uid, sender: req.user._id, type: 'task_assigned',
@@ -98,13 +110,26 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const oldTask = await Task.findById(req.params.id);
+    if (!oldTask) return res.status(404).json({ message: 'Task not found' });
+
+    const owner = await isProjectOwner(oldTask.project, req.user._id);
+
+    // Block non-owners from updating assignees
+    if (req.body.assignees !== undefined && !owner) {
+      return res.status(403).json({ message: 'Only the project owner can assign tasks' });
+    }
+
+    // Block non-owners from updating checklist
+    if (req.body.checklist !== undefined && !owner) {
+      return res.status(403).json({ message: 'Only the project owner can update the checklist' });
+    }
+
     const task = await Task.findByIdAndUpdate(req.params.id, req.body, { new: true })
       .populate('assignees', 'name email avatar')
       .populate('createdBy', 'name email avatar');
-    if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    // Notify new assignees
-    if (req.body.assignees) {
+    // Notify new assignees (owner only reaches here)
+    if (req.body.assignees && owner) {
       const oldAssignees = (oldTask.assignees || []).map(a => a.toString());
       const newAssignees = req.body.assignees.filter(a => !oldAssignees.includes(a.toString()));
       for (const uid of newAssignees) {
@@ -120,7 +145,6 @@ router.put('/:id', auth, async (req, res) => {
       }
     }
 
-    // Log completion
     if (req.body.columnId === 'done' && oldTask.columnId !== 'done') {
       await logActivity(task.project, req.user._id, 'task_completed', `${req.user.name} completed "${task.title}"`, { taskId: task._id });
       req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_completed', message: `${req.user.name} completed "${task.title}"` });
@@ -137,13 +161,36 @@ router.put('/:id/move', auth, async (req, res) => {
   try {
     const { columnId, order } = req.body;
     const oldTask = await Task.findById(req.params.id);
+    if (!oldTask) return res.status(404).json({ message: 'Task not found' });
+
+    // Block moving OUT of done
+    if (oldTask.columnId === 'done' && columnId !== 'done') {
+      return res.status(403).json({ message: 'Completed tasks cannot be moved back' });
+    }
+
+    // Only owner can move task TO done
+    if (columnId === 'done' && oldTask.columnId !== 'done') {
+      const owner = await isProjectOwner(oldTask.project, req.user._id);
+      if (!owner) {
+        return res.status(403).json({ message: 'Only the project owner can mark tasks as Done' });
+      }
+    }
+
     const task = await Task.findByIdAndUpdate(req.params.id, { columnId, order }, { new: true })
-      .populate('assignees', 'name email avatar').populate('createdBy', 'name email avatar');
+      .populate('assignees', 'name email avatar')
+      .populate('createdBy', 'name email avatar');
 
     if (oldTask.columnId !== columnId) {
-      await logActivity(task.project, req.user._id, 'task_moved',
-        `${req.user.name} moved "${task.title}" to ${columnId}`, { taskId: task._id });
-      req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_moved', message: `${req.user.name} moved "${task.title}"` });
+      // Log as completed if moving to done
+      if (columnId === 'done') {
+        await logActivity(task.project, req.user._id, 'task_completed',
+          `${req.user.name} completed "${task.title}"`, { taskId: task._id });
+        req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_completed', message: `${req.user.name} completed "${task.title}"` });
+      } else {
+        await logActivity(task.project, req.user._id, 'task_moved',
+          `${req.user.name} moved "${task.title}" to ${columnId}`, { taskId: task._id });
+        req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_moved', message: `${req.user.name} moved "${task.title}"` });
+      }
     }
 
     req.io.to(`project:${task.project}`).emit('task:moved', task);

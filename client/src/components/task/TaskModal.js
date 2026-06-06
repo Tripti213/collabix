@@ -27,6 +27,10 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
   const [checklist, setChecklist] = useState(initialTask.checklist || []);
   const [newCheck, setNewCheck] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // Check if current user is the project owner
+  const isOwner = project.owner?._id === user?._id || project.owner === user?._id;
 
   useEffect(() => {
     socket.on('task:updated', (updated) => {
@@ -41,16 +45,22 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
 
   const handleSave = async () => {
     setSaving(true);
+    setErrorMsg('');
     try {
       const labels = form.labels ? form.labels.split(',').map(l => l.trim()).filter(Boolean) : [];
-      const res = await api.put(`/tasks/${task._id}`, { ...form, labels, dueDate: form.dueDate || null });
+      const res = await api.put(`/tasks/${task._id}`, {
+        ...form, labels, dueDate: form.dueDate || null
+      });
       setTask(res.data);
       onUpdated(res.data);
       setEditing(false);
+    } catch (err) {
+      setErrorMsg(err.response?.data?.message || 'Save failed');
     } finally { setSaving(false); }
   };
 
   const toggleAssignee = (userId) => {
+    if (!isOwner) return;
     setForm(prev => ({
       ...prev,
       assignees: prev.assignees.includes(userId)
@@ -61,6 +71,11 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
   };
 
   const toggleCheck = async (index) => {
+    if (!isOwner) {
+      setErrorMsg('Only the project owner can update checklist items');
+      setTimeout(() => setErrorMsg(''), 3000);
+      return;
+    }
     const updated = checklist.map((c, i) => i === index ? { ...c, completed: !c.completed } : c);
     setChecklist(updated);
     const res = await api.put(`/tasks/${task._id}`, { checklist: updated });
@@ -68,6 +83,11 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
   };
 
   const addCheck = async () => {
+    if (!isOwner) {
+      setErrorMsg('Only the project owner can add checklist items');
+      setTimeout(() => setErrorMsg(''), 3000);
+      return;
+    }
     if (!newCheck.trim()) return;
     const updated = [...checklist, { text: newCheck, completed: false }];
     setChecklist(updated); setNewCheck('');
@@ -76,6 +96,7 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
   };
 
   const removeCheck = async (index) => {
+    if (!isOwner) return;
     const updated = checklist.filter((_, i) => i !== index);
     setChecklist(updated);
     const res = await api.put(`/tasks/${task._id}`, { checklist: updated });
@@ -94,10 +115,11 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
   };
 
   const completedChecks = checklist.filter(c => c.completed).length;
-  const filteredMembers = project.members.filter(m =>
+  const filteredMembers = project.members?.filter(m =>
     !memberSearch || m.user.name.toLowerCase().includes(memberSearch.toLowerCase())
-  );
-  const columns = typeof project.columns === 'string' ? JSON.parse(project.columns) : (project.columns || []);
+  ) || [];
+  const columns = typeof project.columns === 'string'
+    ? JSON.parse(project.columns) : (project.columns || []);
 
   return (
     <div className="modal-overlay task-modal-overlay" onClick={onClose}>
@@ -116,13 +138,26 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
             ))}
           </div>
           <div className="task-modal-actions">
-            {activeTab === 'details' && !editing && <button className="btn-secondary sm" onClick={() => setEditing(true)}>✏️ Edit</button>}
-            {activeTab === 'details' && editing && <button className="btn-primary sm" onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : '💾 Save'}</button>}
-            {activeTab === 'details' && editing && <button className="btn-secondary sm" onClick={() => setEditing(false)}>Cancel</button>}
+            {activeTab === 'details' && !editing && (
+              <button className="btn-secondary sm" onClick={() => setEditing(true)}>✏️ Edit</button>
+            )}
+            {activeTab === 'details' && editing && (
+              <button className="btn-primary sm" onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving...' : '💾 Save'}
+              </button>
+            )}
+            {activeTab === 'details' && editing && (
+              <button className="btn-secondary sm" onClick={() => { setEditing(false); setErrorMsg(''); }}>Cancel</button>
+            )}
             <button className="btn-danger sm" onClick={handleDelete}>🗑 Delete</button>
             <button className="icon-btn close-btn" onClick={onClose}>✕</button>
           </div>
         </div>
+
+        {/* Error message */}
+        {errorMsg && (
+          <div className="task-modal-error">⚠️ {errorMsg}</div>
+        )}
 
         <div className="task-modal-body">
           <div className="task-modal-left">
@@ -138,7 +173,8 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
 
             {/* Badges */}
             <div className="task-modal-badges">
-              <span className="priority-chip large" style={{ color: PRIORITY_COLORS[task.priority], borderColor: PRIORITY_COLORS[task.priority] }}>
+              <span className="priority-chip large"
+                style={{ color: PRIORITY_COLORS[task.priority], borderColor: PRIORITY_COLORS[task.priority] }}>
                 ● {task.priority}
               </span>
               {task.dueDate && (
@@ -159,7 +195,9 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
                       onChange={e => setForm({...form, description: e.target.value})}
                       placeholder="Add a description..." rows={4} />
                   ) : (
-                    <p className="task-desc">{task.description || <span className="muted">No description added</span>}</p>
+                    <p className="task-desc">
+                      {task.description || <span className="muted">No description added</span>}
+                    </p>
                   )}
                 </div>
 
@@ -168,18 +206,24 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
                     <div className="form-row">
                       <div className="form-group">
                         <label>Priority</label>
-                        <select value={form.priority} onChange={e => setForm({...form, priority: e.target.value})}>
-                          {PRIORITIES.map(p => <option key={p} value={p}>{p.charAt(0).toUpperCase()+p.slice(1)}</option>)}
+                        <select value={form.priority}
+                          onChange={e => setForm({...form, priority: e.target.value})}>
+                          {PRIORITIES.map(p => (
+                            <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
+                          ))}
                         </select>
                       </div>
                       <div className="form-group">
                         <label>Due Date</label>
-                        <input type="date" value={form.dueDate} onChange={e => setForm({...form, dueDate: e.target.value})} />
+                        <input type="date" value={form.dueDate}
+                          onChange={e => setForm({...form, dueDate: e.target.value})} />
                       </div>
                     </div>
                     <div className="form-group">
                       <label>Labels (comma separated)</label>
-                      <input value={form.labels} onChange={e => setForm({...form, labels: e.target.value})} placeholder="design, frontend, bug" />
+                      <input value={form.labels}
+                        onChange={e => setForm({...form, labels: e.target.value})}
+                        placeholder="design, frontend, bug" />
                     </div>
                   </div>
                 )}
@@ -187,29 +231,55 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
                 {/* Checklist */}
                 <div className="section">
                   <div className="section-label">
-                    Checklist {checklist.length > 0 && <span className="muted">({completedChecks}/{checklist.length})</span>}
+                    Checklist
+                    {checklist.length > 0 && (
+                      <span className="muted"> ({completedChecks}/{checklist.length})</span>
+                    )}
+                    {!isOwner && (
+                      <span className="owner-only-badge">👑 Owner only</span>
+                    )}
                   </div>
+
                   {checklist.length > 0 && (
                     <div className="checklist-progress">
                       <div className="progress-bar">
-                        <div className="progress-fill" style={{ width: `${(completedChecks/checklist.length)*100}%` }}></div>
+                        <div className="progress-fill"
+                          style={{ width: `${checklist.length > 0 ? (completedChecks / checklist.length) * 100 : 0}%` }}>
+                        </div>
                       </div>
-                      <span>{Math.round((completedChecks/checklist.length)*100)}%</span>
+                      <span>{checklist.length > 0 ? Math.round((completedChecks / checklist.length) * 100) : 0}%</span>
                     </div>
                   )}
+
                   {checklist.map((item, idx) => (
-                    <div key={idx} className="checklist-item">
-                      <input type="checkbox" checked={item.completed} onChange={() => toggleCheck(idx)} />
+                    <div key={idx} className={`checklist-item ${!isOwner ? 'checklist-readonly' : ''}`}>
+                      <input type="checkbox" checked={item.completed}
+                        onChange={() => toggleCheck(idx)}
+                        disabled={!isOwner}
+                        title={!isOwner ? 'Only the owner can check items' : ''}
+                      />
                       <span className={item.completed ? 'checked' : ''}>{item.text}</span>
-                      <button className="icon-btn xs" onClick={() => removeCheck(idx)}>✕</button>
+                      {isOwner && (
+                        <button className="icon-btn xs" onClick={() => removeCheck(idx)}>✕</button>
+                      )}
                     </div>
                   ))}
-                  <div className="checklist-add">
-                    <input value={newCheck} onChange={e => setNewCheck(e.target.value)}
-                      placeholder="Add checklist item..."
-                      onKeyDown={e => e.key === 'Enter' && addCheck()} />
-                    <button className="btn-secondary sm" onClick={addCheck}>Add</button>
-                  </div>
+
+                  {isOwner ? (
+                    <div className="checklist-add">
+                      <input value={newCheck}
+                        onChange={e => setNewCheck(e.target.value)}
+                        placeholder="Add checklist item..."
+                        onKeyDown={e => e.key === 'Enter' && addCheck()} />
+                      <button className="btn-secondary sm" onClick={addCheck}>Add</button>
+                    </div>
+                  ) : (
+                    checklist.length === 0 && (
+                      <div className="owner-restricted-msg">
+                        🔒 Only the project owner can manage checklist items
+                      </div>
+                    )
+                  )}
                 </div>
               </>
             )}
@@ -233,39 +303,92 @@ export default function TaskModal({ task: initialTask, project, onClose, onUpdat
 
           {/* Sidebar */}
           <div className="task-modal-right">
+
+            {/* Assignees — owner only */}
             <div className="sidebar-section">
-              <div className="section-label">Assignees</div>
-              <input className="member-search" value={memberSearch}
-                onChange={e => setMemberSearch(e.target.value)} placeholder="Search members..." />
-              {filteredMembers.map(m => {
-                const isAssigned = form.assignees.includes(m.user._id);
-                return (
-                  <div key={m.user._id} className={`assignee-row ${isAssigned ? 'assigned' : ''}`}
-                    onClick={() => toggleAssignee(m.user._id)}>
-                    <div className="member-avatar sm">
-                      {m.user.avatar ? <img src={m.user.avatar} alt="" /> : m.user.name[0].toUpperCase()}
+              <div className="section-label">
+                Assignees
+                {!isOwner && <span className="owner-only-badge">👑 Owner only</span>}
+              </div>
+
+              {isOwner ? (
+                <>
+                  <input className="member-search" value={memberSearch}
+                    onChange={e => setMemberSearch(e.target.value)}
+                    placeholder="Search members..." />
+                  {filteredMembers.map(m => {
+                    const isAssigned = form.assignees.includes(m.user._id);
+                    return (
+                      <div key={m.user._id}
+                        className={`assignee-row ${isAssigned ? 'assigned' : ''}`}
+                        onClick={() => toggleAssignee(m.user._id)}>
+                        <div className="member-avatar sm">
+                          {m.user.avatar
+                            ? <img src={m.user.avatar} alt="" />
+                            : m.user.name[0].toUpperCase()}
+                        </div>
+                        <span>{m.user.name}</span>
+                        {isAssigned && <span className="check-mark">✓</span>}
+                      </div>
+                    );
+                  })}
+                  {editing && (
+                    <button className="btn-primary sm"
+                      style={{ marginTop: 8, width: '100%' }}
+                      onClick={handleSave} disabled={saving}>
+                      {saving ? 'Saving...' : 'Save Assignees'}
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* Show current assignees as read-only */}
+                  {task.assignees?.length > 0 ? (
+                    task.assignees.map(a => (
+                      <div key={a._id} className="assignee-row assigned" style={{ cursor: 'default' }}>
+                        <div className="member-avatar sm">
+                          {a.avatar ? <img src={a.avatar} alt="" /> : a.name[0].toUpperCase()}
+                        </div>
+                        <span>{a.name}</span>
+                        <span className="check-mark">✓</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="owner-restricted-msg">
+                      🔒 Only the project owner can assign tasks
                     </div>
-                    <span>{m.user.name}</span>
-                    {isAssigned && <span className="check-mark">✓</span>}
-                  </div>
-                );
-              })}
-              {editing && (
-                <button className="btn-primary sm" style={{marginTop:8, width:'100%'}} onClick={handleSave} disabled={saving}>
-                  {saving ? 'Saving...' : 'Save Assignees'}
-                </button>
+                  )}
+                </>
               )}
             </div>
 
+            {/* Details */}
             <div className="sidebar-section">
               <div className="section-label">Details</div>
-              <div className="detail-row"><span>Created by</span><span>{task.createdBy?.name}</span></div>
-              <div className="detail-row"><span>Created</span><span>{format(new Date(task.createdAt), 'MMM d, yyyy')}</span></div>
-              <div className="detail-row"><span>Column</span>
+              <div className="detail-row">
+                <span>Created by</span>
+                <span>{task.createdBy?.name}</span>
+              </div>
+              <div className="detail-row">
+                <span>Created</span>
+                <span>{format(new Date(task.createdAt), 'MMM d, yyyy')}</span>
+              </div>
+              <div className="detail-row">
+                <span>Column</span>
                 <span>{columns.find(c => c.id === task.columnId)?.name || task.columnId}</span>
               </div>
-              <div className="detail-row"><span>Attachments</span><span>{task.attachments?.length || 0}</span></div>
+              <div className="detail-row">
+                <span>Attachments</span>
+                <span>{task.attachments?.length || 0}</span>
+              </div>
+              <div className="detail-row">
+                <span>Your role</span>
+                <span style={{ color: isOwner ? 'var(--accent2)' : 'var(--text3)', fontWeight: 700 }}>
+                  {isOwner ? '👑 Owner' : '👤 Member'}
+                </span>
+              </div>
             </div>
+
           </div>
         </div>
       </div>

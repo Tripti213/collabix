@@ -42,3 +42,21 @@ router.get('/feed', auth, async (req, res) => {
 });
 
 module.exports = router;
+
+// DELETE all activity for a project (owner only)
+router.delete('/project/:projectId', auth, async (req, res) => {
+  try {
+    const Project = require('../models/Project');
+    const project = await Project.findById(req.params.projectId).select('owner');
+    if (!project) return res.status(404).json({ message: 'Project not found' });
+    if (project.owner.toString() !== req.user._id.toString())
+      return res.status(403).json({ message: 'Only the project owner can clear activity' });
+
+    const result = await Activity.deleteMany({ project: req.params.projectId });
+    console.log(`Cleared ${result.deletedCount} activities for project ${req.params.projectId}`);
+    res.json({ message: `Cleared ${result.deletedCount} activities`, count: result.deletedCount });
+  } catch (err) {
+    console.error('Clear activity error:', err.message);
+    res.status(500).json({ message: err.message });
+  }
+});

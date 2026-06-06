@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import api from '../utils/api';
 import socket from '../utils/socket';
+import { useAuth } from '../context/AuthContext';
 import TaskCard from '../components/task/TaskCard';
 import TaskModal from '../components/task/TaskModal';
 import CreateTaskModal from '../components/task/CreateTaskModal';
@@ -10,7 +11,6 @@ import ProjectHeader from '../components/project/ProjectHeader';
 import MembersModal from '../components/project/MembersModal';
 import FilesTab from '../components/project/FilesTab';
 
-// Safe column parser — handles string, array, or undefined
 function parseColumns(raw) {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
@@ -23,6 +23,7 @@ function parseColumns(raw) {
 export default function ProjectPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [project, setProject] = useState(null);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +51,6 @@ export default function ProjectPage() {
 
     socket.on('task:created', (task) => setTasks(prev => [...prev, task]));
     socket.on('task:updated', (task) => {
-      console.log('task:updated received:', task._id);
       setTasks(prev => prev.map(t => t._id === task._id ? task : t));
       setSelectedTask(prev => prev?._id === task._id ? task : prev);
     });
@@ -67,10 +67,25 @@ export default function ProjectPage() {
     };
   }, [id, fetchData]);
 
+  // Check if current user is project owner
+  const isOwner = project && user && project.owner?._id === user._id;
+
   const onDragEnd = async (result) => {
     const { destination, source, draggableId } = result;
     if (!destination) return;
     if (destination.droppableId === source.droppableId && destination.index === source.index) return;
+
+    // Block moving OUT of done
+    if (source.droppableId === 'done' && destination.droppableId !== 'done') {
+      alert('Completed tasks cannot be moved back to previous stages');
+      return;
+    }
+
+    // Only owner can drag TO done column
+    if (destination.droppableId === 'done' && !isOwner) {
+      alert('Only the project owner can move tasks to Done');
+      return;
+    }
 
     setTasks(prev => prev.map(t => t._id === draggableId
       ? { ...t, columnId: destination.droppableId, order: destination.index } : t));
@@ -81,8 +96,8 @@ export default function ProjectPage() {
         order: destination.index
       });
     } catch (err) {
-      console.error('Move failed:', err.message);
-      fetchData(); // revert on error
+      alert(err.response?.data?.message || 'Move failed');
+      fetchData();
     }
   };
 
@@ -99,6 +114,7 @@ export default function ProjectPage() {
         onViewChange={setActiveView}
         onMembersClick={() => setShowMembers(true)}
         onProjectUpdated={setProject}
+        isOwner={isOwner}
       />
 
       {activeView === 'files' ? (
@@ -108,58 +124,61 @@ export default function ProjectPage() {
       ) : (
         <DragDropContext onDragEnd={onDragEnd}>
           <div className="board">
-            {columns
-              .sort((a, b) => a.order - b.order)
-              .map(col => {
-                const colTasks = tasks
-                  .filter(t => t.columnId === col.id)
-                  .sort((a, b) => a.order - b.order);
+            {columns.sort((a, b) => a.order - b.order).map(col => {
+              const colTasks = tasks
+                .filter(t => t.columnId === col.id)
+                .sort((a, b) => a.order - b.order);
 
-                return (
-                  <div key={col.id} className="column">
-                    <div className="column-header" style={{ '--col-color': col.color }}>
-                      <div className="col-title">
-                        <span className="col-dot"></span>
-                        <span>{col.name}</span>
-                        <span className="col-count">{colTasks.length}</span>
-                      </div>
-                      <button className="col-add-btn" onClick={() => setCreateColumn(col.id)}>+</button>
+              // Done column is locked for non-owners visually
+              const isDoneCol = col.id === 'done';
+              const isLocked = isDoneCol && !isOwner;
+
+              return (
+                <div key={col.id} className={`column ${isLocked ? 'column-locked' : ''}`}>
+                  <div className="column-header" style={{ '--col-color': col.color }}>
+                    <div className="col-title">
+                      <span className="col-dot"></span>
+                      <span>{col.name}</span>
+                      <span className="col-count">{colTasks.length}</span>
+                      {isLocked && <span className="col-lock-badge">🔒 Owner only</span>}
                     </div>
-
-                    <Droppable droppableId={col.id} isDropDisabled={false}>
-                      {(provided, snapshot) => (
-                        <div
-                          ref={provided.innerRef}
-                          {...provided.droppableProps}
-                          className={`column-body ${snapshot.isDraggingOver ? 'dragging-over' : ''}`}
-                        >
-                          {colTasks.map((task, index) => (
-                            <Draggable key={task._id} draggableId={task._id} index={index}>
-                              {(provided, snapshot) => (
-                                <div
-                                  ref={provided.innerRef}
-                                  {...provided.draggableProps}
-                                  {...provided.dragHandleProps}
-                                >
-                                  <TaskCard
-                                    task={task}
-                                    isDragging={snapshot.isDragging}
-                                    onClick={() => setSelectedTask(task)}
-                                  />
-                                </div>
-                              )}
-                            </Draggable>
-                          ))}
-                          {provided.placeholder}
-                          <button className="add-task-btn" onClick={() => setCreateColumn(col.id)}>
-                            + Add task
-                          </button>
-                        </div>
-                      )}
-                    </Droppable>
+                    <button className="col-add-btn" onClick={() => setCreateColumn(col.id)}>+</button>
                   </div>
-                );
-              })}
+
+                  <Droppable droppableId={col.id} isDropDisabled={isLocked}>
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        className={`column-body ${snapshot.isDraggingOver ? 'dragging-over' : ''} ${isLocked ? 'locked-body' : ''}`}
+                      >
+                        {colTasks.map((task, index) => (
+                          <Draggable key={task._id} draggableId={task._id} index={index}>
+                            {(provided, snapshot) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                {...provided.dragHandleProps}
+                              >
+                                <TaskCard
+                                  task={task}
+                                  isDragging={snapshot.isDragging}
+                                  onClick={() => setSelectedTask(task)}
+                                />
+                              </div>
+                            )}
+                          </Draggable>
+                        ))}
+                        {provided.placeholder}
+                        <button className="add-task-btn" onClick={() => setCreateColumn(col.id)}>
+                          + Add task
+                        </button>
+                      </div>
+                    )}
+                  </Droppable>
+                </div>
+              );
+            })}
           </div>
         </DragDropContext>
       )}
@@ -168,6 +187,7 @@ export default function ProjectPage() {
         <TaskModal
           task={selectedTask}
           project={{ ...project, columns }}
+          isOwner={isOwner}
           onClose={() => setSelectedTask(null)}
           onUpdated={(task) => {
             setTasks(prev => prev.map(t => t._id === task._id ? task : t));
@@ -185,6 +205,7 @@ export default function ProjectPage() {
           columnId={createColumn}
           projectId={id}
           project={project}
+          isOwner={isOwner}
           onClose={() => setCreateColumn(null)}
           onCreate={(task) => {
             setTasks(prev => [...prev, task]);
