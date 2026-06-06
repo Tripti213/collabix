@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import ThemeToggle from '../components/shared/ThemeToggle';
 
 const FEATURES = [
   { icon: '🗂', title: 'Kanban Boards', desc: 'Drag and drop tasks across customizable columns. Visualize your entire workflow instantly.' },
@@ -51,6 +52,7 @@ export default function HomePage() {
             <a href="#how" className="home-nav-link">How it works</a>
             <Link to="/login" className="home-nav-signin">Sign in</Link>
             <Link to="/register" className="home-nav-cta">Get started →</Link>
+            <ThemeToggle />
           </div>
         </div>
       </nav>

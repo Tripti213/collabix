@@ -12,6 +12,8 @@ const commentRoutes = require('./routes/comments');
 const notificationRoutes = require('./routes/notifications');
 const userRoutes = require('./routes/users');
 const fileRoutes = require('./routes/files');
+const activityRoutes = require('./routes/activity');
+const analyticsRoutes = require('./routes/analytics');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +39,8 @@ app.use('/api/comments', commentRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
+app.use('/api/activity', activityRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 const connectedUsers = new Map();

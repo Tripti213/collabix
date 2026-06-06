@@ -83,10 +83,10 @@ export default function Sidebar({ projects = [] }) {
                 </Link>
               ))
             )}
-            <button className="sidebar-new-project" onClick={() => navigate('/dashboard')}>
+            {/* <button className="sidebar-new-project" onClick={() => navigate('/dashboard')}>
               <span>+</span>
               {!collapsed && <span>New Project</span>}
-            </button>
+            </button> */}
           </div>
         )}
 
@@ -104,7 +104,6 @@ export default function Sidebar({ projects = [] }) {
       <div className="sidebar-bottom">
         {!collapsed && (
           <div className="sidebar-theme-row">
-            <span className="sidebar-item-icon">🎨</span>
             <span className="sidebar-item-label">Theme</span>
             <ThemeToggle />
           </div>
