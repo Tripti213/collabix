@@ -14,14 +14,26 @@
 ## 📸 Screenshots
 
 <div align="center">
-  <img src="docs/homepg.png" width="49%" />
-  <img src="docs/dashboard.png" width="49%" />
-  <br/><br/>
-  <img src="docs/board.png" width="49%" />
-  <img src="docs/task.png" width="49%" />
-  <br/><br/>
-  <img src="docs/calendar.png" width="49%" />
-  <img src="docs/analytics.png" width="49%" />
+
+### Homepage & Dashboard
+<img src="docs/homepg.png" width="49%" />
+&nbsp;
+<img src="docs/dashboard.png" width="49%" />
+
+<br/>
+
+### Board & Task detail
+<img src="docs/board.png" width="49%" />
+&nbsp;
+<img src="docs/task.png" width="49%" />
+
+<br/>
+
+### Calendar & Analytics
+<img src="docs/calendar.png" width="49%" />
+&nbsp;
+<img src="docs/analytics.png" width="49%" />
+
 </div>
 
 ---
