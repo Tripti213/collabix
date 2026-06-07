@@ -6,17 +6,18 @@ let isConnected = false;
 async function connectRedis() {
   try {
     client = createClient({
-      url: process.env.REDIS_URL || 'redis://localhost:6379',
-      socket: {
-        reconnectStrategy: (retries) => {
-          if (retries > 5) {
-            console.log('Redis: max retries reached, running without cache');
-            return false;
-          }
-          return Math.min(retries * 500, 3000);
-        }
+  url: process.env.REDIS_URL || 'redis://localhost:6379',
+  socket: {
+    tls: process.env.REDIS_URL?.startsWith('rediss://'),
+    reconnectStrategy: (retries) => {
+      if (retries > 5) {
+        console.log('Redis: max retries reached, running without cache');
+        return false;
       }
-    });
+      return Math.min(retries * 500, 3000);
+    }
+  }
+});
 
     client.on('connect', () => {
       isConnected = true;
