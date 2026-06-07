@@ -4,6 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const { connectRedis } = require('./config/redis');
 const { scheduleCleanup } = require('./config/activityCleanup');
 
 const authRoutes = require('./routes/auth');
@@ -27,7 +28,9 @@ const io = new Server(server, {
   },
 });
 
+// Connect databases
 connectDB();
+connectRedis();
 scheduleCleanup();
 
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
@@ -43,7 +46,10 @@ app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/analytics', analyticsRoutes);
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/api/health', (req, res) => res.json({
+  status: 'ok',
+  redis: require('./config/redis').getIsConnected() ? 'connected' : 'disconnected'
+}));
 
 const connectedUsers = new Map();
 io.on('connection', (socket) => {

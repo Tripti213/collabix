@@ -4,6 +4,7 @@ const Task = require('../models/Task');
 const Notification = require('../models/Notification');
 const Activity = require('../models/Activity');
 const auth = require('../middleware/auth');
+const redis = require('../config/redis');
 
 const DEFAULT_COLUMNS = [
   { id: 'todo',       name: 'To Do',       order: 0, color: '#64748b' },
@@ -13,21 +14,26 @@ const DEFAULT_COLUMNS = [
 ];
 
 async function getFullProject(projectId) {
-  const project = await Project.findById(projectId)
+  return Project.findById(projectId)
     .populate('owner', 'name email avatar')
     .populate('members.user', 'name email avatar');
-  return project;
 }
 
-// GET all projects for user
+// GET all projects for user — cached
 router.get('/', auth, async (req, res) => {
   try {
+    const cacheKey = `projects:user:${req.user._id}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const projects = await Project.find({
       $or: [{ owner: req.user._id }, { 'members.user': req.user._id }],
       isArchived: false
     }).populate('owner', 'name email avatar')
       .populate('members.user', 'name email avatar')
-      .sort('-createdAt');
+      .sort('-createdAt').lean();
+
+    await redis.set(cacheKey, projects, 120); // cache 2 min
     res.json(projects);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -47,14 +53,15 @@ router.post('/', auth, async (req, res) => {
     await project.populate('owner', 'name email avatar');
     await project.populate('members.user', 'name email avatar');
 
-    // Log activity
     await Activity.create({
-      project: project._id,
-      user: req.user._id,
+      project: project._id, user: req.user._id,
       type: 'project_created',
       message: `${req.user.name} created project "${name}"`,
       meta: { projectId: project._id }
     });
+
+    // Invalidate user projects cache
+    await redis.del(`projects:user:${req.user._id}`);
 
     req.io.emit('project:created', project);
     res.status(201).json(project);
@@ -63,13 +70,27 @@ router.post('/', auth, async (req, res) => {
   }
 });
 
-// GET single project
+// GET single project — cached
 router.get('/:id', auth, async (req, res) => {
   try {
+    const cacheKey = `project:${req.params.id}`;
+    const cached = await redis.get(cacheKey);
+
+    if (cached) {
+      const isMember = cached.members?.some(m =>
+        (m.user?._id || m.user)?.toString() === req.user._id.toString()
+      );
+      if (!isMember) return res.status(403).json({ message: 'Access denied' });
+      return res.json(cached);
+    }
+
     const project = await getFullProject(req.params.id);
     if (!project) return res.status(404).json({ message: 'Project not found' });
+
     const isMember = project.members.some(m => m.user._id.toString() === req.user._id.toString());
     if (!isMember) return res.status(403).json({ message: 'Access denied' });
+
+    await redis.set(cacheKey, project.toObject(), 120);
     res.json(project);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -87,6 +108,10 @@ router.put('/:id', auth, async (req, res) => {
     const updated = await Project.findByIdAndUpdate(req.params.id, req.body, { new: true })
       .populate('owner', 'name email avatar')
       .populate('members.user', 'name email avatar');
+
+    // Invalidate caches
+    await redis.del(`project:${req.params.id}`);
+    await redis.del(`projects:user:*`);
 
     req.io.to(`project:${req.params.id}`).emit('project:updated', updated);
     res.json(updated);
@@ -112,30 +137,36 @@ router.post('/:id/members', auth, async (req, res) => {
     await project.populate('members.user', 'name email avatar');
     await project.populate('owner', 'name email avatar');
 
-    // Notify new member
     await Notification.create({
       recipient: userId, sender: req.user._id,
       type: 'project_invite', title: 'Project Invitation',
       message: `${req.user.name} added you to project "${project.name}"`,
       link: `/projects/${project._id}`
     });
+
     const socketId = global.connectedUsers?.get(userId);
     if (socketId) req.io.to(socketId).emit('notification:new', {
       message: `You've been added to ${project.name}`
     });
 
-    // Log activity
-    await Activity.create({
-      project: req.params.id,
-      user: req.user._id,
-      type: 'member_added',
-      message: `${req.user.name} added a new member to the project`,
-      meta: { userId }
-    });
-    req.io.to(`project:${req.params.id}`).emit('activity:new', {
-      type: 'member_added',
-      message: `${req.user.name} added a member`
-    });
+    try {
+      await Activity.create({
+        project: project._id, user: req.user._id,
+        type: 'member_added',
+        message: `${req.user.name} added a new member to the project`,
+        meta: { userId }
+      });
+      req.io.to(`project:${req.params.id}`).emit('activity:new', {
+        type: 'member_added', message: `${req.user.name} added a member`
+      });
+    } catch (actErr) {
+      console.error('Activity log failed:', actErr.message);
+    }
+
+    // Invalidate caches
+    await redis.del(`project:${req.params.id}`);
+    await redis.del(`projects:user:${req.user._id}`);
+    await redis.del(`projects:user:${userId}`);
 
     req.io.to(`project:${req.params.id}`).emit('project:updated', project);
     res.json(project);
@@ -156,18 +187,19 @@ router.delete('/:id/members/:userId', auth, async (req, res) => {
     await project.populate('members.user', 'name email avatar');
     await project.populate('owner', 'name email avatar');
 
-    // Log activity
-    await Activity.create({
-      project: req.params.id,
-      user: req.user._id,
-      type: 'member_removed',
-      message: `${req.user.name} removed a member from the project`,
-      meta: { userId: req.params.userId }
-    });
-    req.io.to(`project:${req.params.id}`).emit('activity:new', {
-      type: 'member_removed',
-      message: `${req.user.name} removed a member`
-    });
+    try {
+      await Activity.create({
+        project: req.params.id, user: req.user._id,
+        type: 'member_removed',
+        message: `${req.user.name} removed a member from the project`,
+        meta: { userId: req.params.userId }
+      });
+    } catch (actErr) { console.error('Activity log failed:', actErr.message); }
+
+    // Invalidate caches
+    await redis.del(`project:${req.params.id}`);
+    await redis.del(`projects:user:${req.user._id}`);
+    await redis.del(`projects:user:${req.params.userId}`);
 
     req.io.to(`project:${req.params.id}`).emit('project:updated', project);
     res.json(project);
@@ -186,6 +218,11 @@ router.delete('/:id', auth, async (req, res) => {
 
     await Task.deleteMany({ project: req.params.id });
     await Project.findByIdAndDelete(req.params.id);
+
+    // Invalidate caches
+    await redis.del(`project:${req.params.id}`);
+    await redis.del(`projects:user:*`);
+
     req.io.emit('project:deleted', req.params.id);
     res.json({ message: 'Project deleted' });
   } catch (err) {

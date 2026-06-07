@@ -4,12 +4,13 @@ const Project = require('../models/Project');
 const Notification = require('../models/Notification');
 const Activity = require('../models/Activity');
 const auth = require('../middleware/auth');
+const redis = require('../config/redis');
 
 async function logActivity(projectId, userId, type, message, meta = {}) {
   try {
     const doc = await Activity.create({ project: projectId, user: userId, type, message, meta });
     console.log('Activity logged:', type, '| id:', doc._id);
-  } catch (e) { 
+  } catch (e) {
     console.error('Activity log FAILED:', type, '| error:', e.message);
   }
 }
@@ -19,12 +20,19 @@ async function isProjectOwner(projectId, userId) {
   return project?.owner.toString() === userId.toString();
 }
 
+// GET tasks for project — cached
 router.get('/project/:projectId', auth, async (req, res) => {
   try {
+    const cacheKey = `tasks:project:${req.params.projectId}`;
+    const cached = await redis.get(cacheKey);
+    if (cached) return res.json(cached);
+
     const tasks = await Task.find({ project: req.params.projectId, isArchived: false })
       .populate('assignees', 'name email avatar')
       .populate('createdBy', 'name email avatar')
-      .sort('order');
+      .sort('order').lean();
+
+    await redis.set(cacheKey, tasks, 60); // cache 1 min
     res.json(tasks);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -70,7 +78,6 @@ router.post('/', auth, async (req, res) => {
   try {
     const { title, description, project, columnId, assignees, priority, labels, dueDate, coverColor } = req.body;
 
-    // Only owner can assign tasks
     const owner = await isProjectOwner(project, req.user._id);
     const finalAssignees = owner ? (assignees || []) : [];
 
@@ -99,6 +106,10 @@ router.post('/', auth, async (req, res) => {
     }
 
     await logActivity(project, req.user._id, 'task_created', `${req.user.name} created task "${title}"`, { taskId: task._id, taskTitle: title });
+
+    // Invalidate tasks cache
+    await redis.del(`tasks:project:${project}`);
+
     req.io.to(`project:${project}`).emit('task:created', task);
     req.io.to(`project:${project}`).emit('activity:new', { type: 'task_created', message: `${req.user.name} created "${title}"` });
     res.status(201).json(task);
@@ -114,21 +125,16 @@ router.put('/:id', auth, async (req, res) => {
 
     const owner = await isProjectOwner(oldTask.project, req.user._id);
 
-    // Block non-owners from updating assignees
-    if (req.body.assignees !== undefined && !owner) {
+    if (req.body.assignees !== undefined && !owner)
       return res.status(403).json({ message: 'Only the project owner can assign tasks' });
-    }
 
-    // Block non-owners from updating checklist
-    if (req.body.checklist !== undefined && !owner) {
+    if (req.body.checklist !== undefined && !owner)
       return res.status(403).json({ message: 'Only the project owner can update the checklist' });
-    }
 
     const task = await Task.findByIdAndUpdate(req.params.id, req.body, { new: true })
       .populate('assignees', 'name email avatar')
       .populate('createdBy', 'name email avatar');
 
-    // Notify new assignees (owner only reaches here)
     if (req.body.assignees && owner) {
       const oldAssignees = (oldTask.assignees || []).map(a => a.toString());
       const newAssignees = req.body.assignees.filter(a => !oldAssignees.includes(a.toString()));
@@ -149,6 +155,9 @@ router.put('/:id', auth, async (req, res) => {
       await logActivity(task.project, req.user._id, 'task_completed', `${req.user.name} completed "${task.title}"`, { taskId: task._id });
       req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_completed', message: `${req.user.name} completed "${task.title}"` });
     }
+
+    // Invalidate cache
+    await redis.del(`tasks:project:${task.project}`);
 
     req.io.to(`project:${task.project}`).emit('task:updated', task);
     res.json(task);
@@ -171,9 +180,7 @@ router.put('/:id/move', auth, async (req, res) => {
     // Only owner can move task TO done
     if (columnId === 'done' && oldTask.columnId !== 'done') {
       const owner = await isProjectOwner(oldTask.project, req.user._id);
-      if (!owner) {
-        return res.status(403).json({ message: 'Only the project owner can mark tasks as Done' });
-      }
+      if (!owner) return res.status(403).json({ message: 'Only the project owner can mark tasks as Done' });
     }
 
     const task = await Task.findByIdAndUpdate(req.params.id, { columnId, order }, { new: true })
@@ -181,17 +188,17 @@ router.put('/:id/move', auth, async (req, res) => {
       .populate('createdBy', 'name email avatar');
 
     if (oldTask.columnId !== columnId) {
-      // Log as completed if moving to done
       if (columnId === 'done') {
-        await logActivity(task.project, req.user._id, 'task_completed',
-          `${req.user.name} completed "${task.title}"`, { taskId: task._id });
+        await logActivity(task.project, req.user._id, 'task_completed', `${req.user.name} completed "${task.title}"`, { taskId: task._id });
         req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_completed', message: `${req.user.name} completed "${task.title}"` });
       } else {
-        await logActivity(task.project, req.user._id, 'task_moved',
-          `${req.user.name} moved "${task.title}" to ${columnId}`, { taskId: task._id });
+        await logActivity(task.project, req.user._id, 'task_moved', `${req.user.name} moved "${task.title}" to ${columnId}`, { taskId: task._id });
         req.io.to(`project:${task.project}`).emit('activity:new', { type: 'task_moved', message: `${req.user.name} moved "${task.title}"` });
       }
     }
+
+    // Invalidate cache
+    await redis.del(`tasks:project:${task.project}`);
 
     req.io.to(`project:${task.project}`).emit('task:moved', task);
     res.json(task);
@@ -204,6 +211,10 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     const task = await Task.findByIdAndDelete(req.params.id);
     await logActivity(task.project, req.user._id, 'task_deleted', `${req.user.name} deleted task "${task.title}"`, {});
+
+    // Invalidate cache
+    await redis.del(`tasks:project:${task.project}`);
+
     req.io.to(`project:${task.project}`).emit('task:deleted', req.params.id);
     res.json({ message: 'Task deleted' });
   } catch (err) {
