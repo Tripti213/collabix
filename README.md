@@ -1,77 +1,118 @@
-# Collabix — MERN Project Management Tool
+<div align="center">
 
-A full-stack collaborative project management tool (Trello/Asana-like) built with the MERN stack.
+# ⬡ Collabix
 
-## Tech Stack
+**Real-time collaborative project management for modern teams**
 
-- **MongoDB** — Database
-- **Express.js** — REST API
-- **React.js** — Frontend SPA
-- **Node.js** — Runtime
-- **Socket.io** — Real-time WebSocket updates
-- **JWT** — Authentication
-- **react-beautiful-dnd** — Drag-and-drop board
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-collabix--mu.vercel.app-6366f1?style=for-the-badge&logo=vercel)](https://collabix-mu.vercel.app)
+[![API Status](https://img.shields.io/badge/API-collabix.onrender.com-22c55e?style=for-the-badge&logo=render)](https://collabix.onrender.com/api/health)
+
+</div>
 
 ---
 
-## Features
+## 📸 Screenshots
 
-### Auth System
-- Register / Login with JWT tokens
-- Protected routes, persistent sessions
+<div align="center">
+  <img src="docs/homepg.png" width="49%" />
+  <img src="docs/dashboard.png" width="49%" />
+  <br/><br/>
+  <img src="docs/board.png" width="49%" />
+  <img src="docs/task.png" width="49%" />
+  <br/><br/>
+  <img src="docs/calendar.png" width="49%" />
+  <img src="docs/analytics.png" width="49%" />
+</div>
 
-### Projects
-- Create projects with name, description, color
-- Invite members by name/email search
-- Owner/member/viewer roles
+---
 
-### Kanban Board (Drag & Drop)
-- 4 default columns: To Do, In Progress, In Review, Done
-- Drag tasks between columns
-- Real-time updates via WebSockets
+## ✨ Features
+
+### Project Management
+- Create projects with custom colors, descriptions and due dates
+- Invite teammates by name or email search
+
+### Kanban Board
+- **Drag & drop** tasks across To Do → In Progress → In Review → Done
+- Real-time board updates for all members simultaneously — no refresh needed
 
 ### Tasks
-- Create tasks with title, description, priority, due date, labels, cover color
-- Assign multiple members
-- Checklist with progress bar
-- Mark overdue tasks
+- Title, description, priority (Low / Medium / High / Urgent), due dates, labels, cover colors
+- Assign members, Checklist, File attachments
 
-### Comments
-- Comment on any task
-- Edit/delete your own comments
-- Real-time updates
+### Comments & @Mentions
+- Real-time comments on every task via WebSockets
+- Type **@name** to mention a teammate — they get notified instantly
 
 ### Notifications
-- Task assignment notifications
-- Comment notifications
-- Project invite notifications
-- Real-time toast alerts
-- Mark as read / mark all read
+- Real-time toast alerts for every action
+
+### Analytics
+- Per-project analytics dashboard with:
+  - **Completion rate** ring chart
+  - **Tasks by priority** bar chart
+  - **7-day trend** — tasks created vs completed
+  - **Team productivity** — tasks per member with completion rate
+
+### Calendar
+- Monthly calendar view with all task deadlines
+- Overdue tasks highlighted in red
+
+### Activity Feed
+- Logs: task created, moved, completed, deleted, comments added, members added
+
+### Themes
+- **Dark**, **Black** and **Light** themes
+
+### Security
+- JWT authentication with 7-day expiry
+- **Token blacklisting** via Redis on logout — old tokens can't be reused
+- Passwords hashed with bcryptjs (12 rounds)
+- CORS locked to production domain only
 
 ---
 
-## Setup & Run
+## 🛠 Tech Stack
 
-### Prerequisites
-- Node.js 18+
-- MongoDB (local or Atlas)
+### Frontend
+| Technology | Role |
+|---|---|
+| React 19 | UI framework |
+| React Router v7 | Client-side routing |
+| Socket.io Client | Real-time WebSocket updates |
+| react-beautiful-dnd | Drag & drop Kanban board |
+| Axios | HTTP requests |
+| date-fns | Date formatting |
 
-### 1. Backend
+### Backend
+| Technology | Role |
+|---|---|
+| Node.js + Express | REST API server |
+| Socket.io | WebSocket server |
+| MongoDB + Mongoose | Primary database |
+| Redis (Upstash) | Caching + token blacklist |
+| JWT + bcryptjs | Auth & password security |
+| Cloudinary + Multer | File upload & storage |
 
-```bash
-cd server
-cp .env.example .env
-# Edit .env and set MONGO_URI, JWT_SECRET
-npm install
-npm start
-# Server runs on http://localhost:5001
-```
+### Infrastructure
+| Service | Role |
+|---|---|
+| MongoDB Atlas | Cloud database |
+| Upstash Redis | Serverless Redis |
+| Cloudinary | Media & file storage |
+| Render | Backend hosting |
+| Vercel | Frontend hosting |
 
-### 2. Frontend
+---
 
-```bash
-cd client
-npm install
-npm start
-# App runs on http://localhost:3000
-```
+## 🔄 Real-time Events
+
+All changes sync instantly across all open browser sessions via Socket.io:
+
+`task:created` · `task:updated` · `task:moved` · `task:deleted` · `project:updated` · `comment:added` · `comment:updated` · `comment:deleted` · `notification:new` · `activity:new`
+
+---
+
+## 📄 License
+
+MIT © [Tripti Gupta](https://github.com/Tripti213)
